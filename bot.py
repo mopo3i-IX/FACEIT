@@ -49,7 +49,7 @@ class FaceitBot(commands.Bot):
         logging.info(f"📡 Отслеживаем игрока: {TARGET_PLAYER}")
         logging.info(f"📢 Канал для оповещений: {CHANNEL_ID}")
         logging.info(f"🌐 Веб-сервер запущен на порту {PORT}")
-        # Запускаем фоновую задачу
+        # ИСПРАВЛЕНО: check_match_loop вместо check_current_match
         self.loop.create_task(self.check_match_loop())
 
     async def check_match_loop(self):
@@ -299,3 +299,4 @@ if __name__ == "__main__":
     
     # Запускаем Discord бота
     bot.run(DISCORD_TOKEN)
+
