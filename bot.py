@@ -49,7 +49,6 @@ class FaceitBot(commands.Bot):
         logging.info(f"📡 Отслеживаем игрока: {TARGET_PLAYER}")
         logging.info(f"📢 Канал для оповещений: {CHANNEL_ID}")
         logging.info(f"🌐 Веб-сервер запущен на порту {PORT}")
-        # ИСПРАВЛЕНО: check_match_loop вместо check_current_match
         self.loop.create_task(self.check_match_loop())
 
     async def check_match_loop(self):
@@ -99,14 +98,14 @@ class FaceitBot(commands.Bot):
                     await channel.send(embed=embed)
                     logging.info(f"✅ Оповещение о матче {match_info['match_id']} отправлено!")
                     
-                    await asyncio.sleep(300)  # Ждем 5 минут перед следующей проверкой этого же матча
+                    await asyncio.sleep(300)
                 
-                # Ждем 2 минуты до следующей проверки
                 await asyncio.sleep(120)
                 
             except Exception as e:
                 logging.error(f"❌ Ошибка в фоновой задаче: {e}")
                 await asyncio.sleep(60)
+
     async def get_player_id(self, nickname):
         """Получает ID игрока по нику"""
         url = f"https://open.faceit.com/data/v4/players?nickname={nickname}"
@@ -128,6 +127,7 @@ class FaceitBot(commands.Bot):
         except Exception as e:
             logging.error(f"❌ Исключение при запросе: {e}")
             return None
+
     async def get_current_match_info(self, nickname):
         """Получает информацию о текущем матче"""
         player_id = await self.get_player_id(nickname)
@@ -161,9 +161,14 @@ class FaceitBot(commands.Bot):
             for team in full_match['teams']:
                 team_players = []
                 for player in team['roster']:
+                    # Защита от None значения
+                    elo = player.get('game_skill_level', '?')
+                    if elo is None:
+                        elo = '?'
+                    
                     team_players.append({
                         'nickname': player['nickname'],
-                        'elo': player.get('game_skill_level', '?')
+                        'elo': elo
                     })
                 teams.append(team_players)
             
@@ -227,9 +232,11 @@ class FaceitBot(commands.Bot):
             matches_today = 0
             
             for match in matches:
+                # Проверяем обе команды
                 for team in match['teams']:
                     for player in team['players']:
                         if player['nickname'].lower() == nickname.lower():
+                            # Проверка победы
                             if team.get('victory') is True:
                                 wins += 1
                             
@@ -303,6 +310,3 @@ if __name__ == "__main__":
     
     # Запускаем Discord бота
     bot.run(DISCORD_TOKEN)
-
-
-
