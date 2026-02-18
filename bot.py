@@ -109,20 +109,26 @@ class FaceitBot(commands.Bot):
                 await asyncio.sleep(60)
 
     async def get_player_id(self, nickname):
-        """Получает ID игрока по нику"""
-        url = f"https://open.faceit.com/data/v4/players?nickname={nickname}"
-        headers = {"Authorization": f"Bearer {FACEIT_API_KEY}"}
+    """Получает ID игрока по нику"""
+    url = f"https://open.faceit.com/data/v4/players?nickname={nickname}"
+    headers = {"Authorization": f"Bearer {FACEIT_API_KEY}"}
+    
+    try:
+        logging.info(f"🔍 Запрос к Faceit API: {url}")
+        response = requests.get(url, headers=headers)
+        logging.info(f"📊 Статус ответа: {response.status_code}")
         
-        try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                return response.json()['player_id']
-            else:
-                logging.error(f"❌ Ошибка получения ID: {response.status_code}")
-                return None
-        except Exception as e:
-            logging.error(f"❌ Ошибка: {e}")
+        if response.status_code == 200:
+            data = response.json()
+            logging.info(f"✅ Найден игрок: {data.get('player_id')}")
+            return data['player_id']
+        else:
+            logging.error(f"❌ Ошибка Faceit API: {response.status_code}")
+            logging.error(f"📝 Текст ошибки: {response.text}")
             return None
+    except Exception as e:
+        logging.error(f"❌ Исключение при запросе: {e}")
+        return None
 
     async def get_current_match_info(self, nickname):
         """Получает информацию о текущем матче"""
@@ -299,4 +305,5 @@ if __name__ == "__main__":
     
     # Запускаем Discord бота
     bot.run(DISCORD_TOKEN)
+
 
