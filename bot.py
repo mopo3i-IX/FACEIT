@@ -44,7 +44,13 @@ class FaceitBot(commands.Bot):
         super().__init__(command_prefix='!', intents=intents)
         
     async def setup_hook(self):
-        await self.tree.sync()
+        # Синхронизируем команды с Discord
+        try:
+            synced = await self.tree.sync()
+            logging.info(f"✅ Синхронизировано {len(synced)} команд")
+        except Exception as e:
+            logging.error(f"❌ Ошибка синхронизации команд: {e}")
+        
         logging.info(f"✅ Бот {self.user} запущен!")
         logging.info(f"📡 Отслеживаем игрока: {TARGET_PLAYER}")
         logging.info(f"📢 Канал для оповещений: {CHANNEL_ID}")
@@ -66,7 +72,8 @@ class FaceitBot(commands.Bot):
         while not self.is_closed():
             try:
                 check_count += 1
-                logging.info(f"🔍 Проверка матча #{check_count}")
+                if check_count % 5 == 0:  # Логируем каждую 5-ю проверку
+                    logging.info(f"🔍 Проверка матча #{check_count}")
                 
                 match_info = await self.get_current_match_info(TARGET_PLAYER)
                 
@@ -100,7 +107,7 @@ class FaceitBot(commands.Bot):
                     
                     await asyncio.sleep(300)
                 
-                await asyncio.sleep(120)
+                await asyncio.sleep(60)  # Проверяем каждую минуту
                 
             except Exception as e:
                 logging.error(f"❌ Ошибка в фоновой задаче: {e}")
@@ -112,20 +119,16 @@ class FaceitBot(commands.Bot):
         headers = {"Authorization": f"Bearer {FACEIT_API_KEY}"}
         
         try:
-            logging.info(f"🔍 Запрос к Faceit API: {url}")
             response = requests.get(url, headers=headers)
-            logging.info(f"📊 Статус ответа: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
-                logging.info(f"✅ Найден игрок: {data.get('player_id')}")
-                return data['player_id']
+                return data.get('player_id')
             else:
-                logging.error(f"❌ Ошибка Faceit API: {response.status_code}")
-                logging.error(f"📝 Текст ошибки: {response.text}")
+                logging.error(f"❌ Ошибка Faceit API (get_player_id): {response.status_code}")
                 return None
         except Exception as e:
-            logging.error(f"❌ Исключение при запросе: {e}")
+            logging.error(f"❌ Исключение при запросе ID: {e}")
             return None
 
     async def get_current_match_info(self, nickname):
@@ -137,6 +140,7 @@ class FaceitBot(commands.Bot):
         headers = {"Authorization": f"Bearer {FACEIT_API_KEY}"}
         
         try:
+            # Проверяем текущий матч игрока
             url = f"https://open.faceit.com/data/v4/players/{player_id}/current-match"
             response = requests.get(url, headers=headers)
             
@@ -149,6 +153,8 @@ class FaceitBot(commands.Bot):
                 return None
             
             match_id = match_data['match_id']
+            
+            # Получаем детальную информацию о матче
             match_url = f"https://open.faceit.com/data/v4/matches/{match_id}"
             match_response = requests.get(match_url, headers=headers)
             
@@ -157,23 +163,31 @@ class FaceitBot(commands.Bot):
             
             full_match = match_response.json()
             
+            # Собираем информацию о командах
             teams = []
-            for team in full_match['teams']:
+            for team in full_match.get('teams', []):
                 team_players = []
-                for player in team['roster']:
-                    # Защита от None значения
-                    elo = player.get('game_skill_level', '?')
-                    if elo is None:
-                        elo = '?'
+                for player in team.get('roster', []):
+                    # Получаем ELO игрока (может быть в разных местах)
+                    elo = '?'
+                    if 'game_skill_level' in player:
+                        elo = player['game_skill_level']
+                    elif 'skill_level' in player:
+                        elo = player['skill_level']
                     
                     team_players.append({
-                        'nickname': player['nickname'],
+                        'nickname': player.get('nickname', 'Unknown'),
                         'elo': elo
                     })
                 teams.append(team_players)
             
-            map_name = full_match.get('voting', {}).get('map', {}).get('pick', ['Unknown'])[0]
+            # Получаем карту
+            map_name = 'Unknown'
+            voting = full_match.get('voting', {})
+            if voting and 'map' in voting and 'pick' in voting['map']:
+                map_name = voting['map']['pick'][0] if voting['map']['pick'] else 'Unknown'
             
+            # Получаем регион/сервер
             region_map = {
                 'EU': 'Europe', 'NA': 'North America', 'SA': 'South America',
                 'OCE': 'Oceania', 'ASIA': 'Asia'
@@ -202,21 +216,32 @@ class FaceitBot(commands.Bot):
         headers = {"Authorization": f"Bearer {FACEIT_API_KEY}"}
         
         try:
+            # Получаем основную информацию об игроке
             player_url = f"https://open.faceit.com/data/v4/players/{player_id}"
             player_response = requests.get(player_url, headers=headers)
             
-            history_url = f"https://open.faceit.com/data/v4/players/{player_id}/history?game=cs2&offset=0&limit=30"
-            history_response = requests.get(history_url, headers=headers)
-            
-            if player_response.status_code != 200 or history_response.status_code != 200:
+            if player_response.status_code != 200:
                 return None
             
             player_data = player_response.json()
+            
+            # Получаем ELO и уровень из games.cs2
+            games_data = player_data.get('games', {})
+            cs2_data = games_data.get('cs2', {})
+            elo = cs2_data.get('faceit_elo', 0)
+            level = cs2_data.get('skill_level', 0)
+            
+            # Получаем историю матчей
+            history_url = f"https://open.faceit.com/data/v4/players/{player_id}/history?game=cs2&offset=0&limit=30"
+            history_response = requests.get(history_url, headers=headers)
+            
+            if history_response.status_code != 200:
+                return {
+                    'elo': elo, 'level': level, 'winrate': 0, 
+                    'kd': 0.0, 'matches_today': 0, 'total_matches': 0
+                }
+            
             history_data = history_response.json()
-            
-            elo = player_data.get('games', {}).get('cs2', {}).get('faceit_elo', 0)
-            level = player_data.get('games', {}).get('cs2', {}).get('skill_level', 0)
-            
             matches = history_data.get('items', [])
             
             if not matches:
@@ -232,21 +257,25 @@ class FaceitBot(commands.Bot):
             matches_today = 0
             
             for match in matches:
-                # Проверяем обе команды
-                for team in match['teams']:
-                    for player in team['players']:
-                        if player['nickname'].lower() == nickname.lower():
-                            # Проверка победы
+                match_date = datetime.fromtimestamp(match.get('created_at', 0) / 1000)
+                
+                # Проверяем, был ли матч сегодня
+                if match_date >= today_start:
+                    matches_today += 1
+                
+                # Ищем игрока в матче
+                for team in match.get('teams', []):
+                    for player in team.get('players', []):
+                        if player.get('nickname', '').lower() == nickname.lower():
+                            # Проверяем победу
                             if team.get('victory') is True:
                                 wins += 1
                             
+                            # Получаем статистику игрока
                             player_stats = player.get('player_stats', {})
-                            total_kills += int(player_stats.get('Kills', 0))
-                            total_deaths += int(player_stats.get('Deaths', 0))
-                            
-                            match_date = datetime.fromtimestamp(match['created_at'] / 1000)
-                            if match_date >= today_start:
-                                matches_today += 1
+                            if isinstance(player_stats, dict):
+                                total_kills += int(player_stats.get('Kills', 0))
+                                total_deaths += int(player_stats.get('Deaths', 0))
                             break
             
             total_matches = len(matches)
@@ -254,8 +283,11 @@ class FaceitBot(commands.Bot):
             kd = round(total_kills / total_deaths, 2) if total_deaths > 0 else 0.0
             
             return {
-                'elo': elo, 'level': level, 'winrate': winrate,
-                'kd': kd, 'matches_today': matches_today,
+                'elo': elo, 
+                'level': level, 
+                'winrate': winrate,
+                'kd': kd, 
+                'matches_today': matches_today,
                 'total_matches': total_matches
             }
             
@@ -269,36 +301,46 @@ bot = FaceitBot()
 # ========== КОМАНДЫ ==========
 @bot.tree.command(name="stats", description="Показать статистику игрока UNCRKING")
 async def stats(interaction: discord.Interaction):
-    await interaction.response.defer()
-    
-    stats_data = await bot.get_player_stats(TARGET_PLAYER)
-    
-    if not stats_data:
-        await interaction.followup.send("❌ Не удалось получить статистику игрока")
-        return
-    
-    embed = discord.Embed(
-        title=f"📊 Статистика {TARGET_PLAYER}",
-        color=0xFF5500,
-        timestamp=datetime.now()
-    )
-    
-    embed.add_field(name="🎮 Уровень", value=f"**{stats_data['level']}**", inline=True)
-    embed.add_field(name="⭐ ELO", value=f"**{stats_data['elo']}**", inline=True)
-    embed.add_field(name="📈 Винрейт (30 матчей)", value=f"**{stats_data['winrate']}%**", inline=True)
-    embed.add_field(name="⚔️ K/D (30 матчей)", value=f"**{stats_data['kd']}**", inline=True)
-    embed.add_field(name="📅 Игр сегодня", value=f"**{stats_data['matches_today']}**", inline=True)
-    embed.add_field(name="🎯 Всего матчей", value=f"**{stats_data['total_matches']}**", inline=True)
-    
-    embed.add_field(
-        name="🔗 Ссылки",
-        value=f"[Профиль Faceit](https://www.faceit.com/ru/players/{TARGET_PLAYER})",
-        inline=False
-    )
-    
-    embed.set_footer(text="Данные обновлены")
-    
-    await interaction.followup.send(embed=embed)
+    """Команда для получения статистики"""
+    try:
+        # Сразу отправляем "думает" статус
+        await interaction.response.defer(thinking=True)
+        
+        stats_data = await bot.get_player_stats(TARGET_PLAYER)
+        
+        if not stats_data:
+            await interaction.followup.send("❌ Не удалось получить статистику игрока")
+            return
+        
+        embed = discord.Embed(
+            title=f"📊 Статистика {TARGET_PLAYER}",
+            color=0xFF5500,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(name="🎮 Уровень", value=f"**{stats_data['level']}**", inline=True)
+        embed.add_field(name="⭐ ELO", value=f"**{stats_data['elo']}**", inline=True)
+        embed.add_field(name="📈 Винрейт (30 матчей)", value=f"**{stats_data['winrate']}%**", inline=True)
+        embed.add_field(name="⚔️ K/D (30 матчей)", value=f"**{stats_data['kd']}**", inline=True)
+        embed.add_field(name="📅 Игр сегодня", value=f"**{stats_data['matches_today']}**", inline=True)
+        embed.add_field(name="🎯 Всего матчей", value=f"**{stats_data['total_matches']}**", inline=True)
+        
+        embed.add_field(
+            name="🔗 Ссылки",
+            value=f"[Профиль Faceit](https://www.faceit.com/ru/players/{TARGET_PLAYER})",
+            inline=False
+        )
+        
+        embed.set_footer(text="Данные обновлены")
+        
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        logging.error(f"❌ Ошибка в команде stats: {e}")
+        try:
+            await interaction.followup.send(f"❌ Произошла ошибка: {str(e)[:100]}")
+        except:
+            pass
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
@@ -309,4 +351,7 @@ if __name__ == "__main__":
     web_thread.start()
     
     # Запускаем Discord бота
-    bot.run(DISCORD_TOKEN)
+    try:
+        bot.run(DISCORD_TOKEN)
+    except Exception as e:
+        logging.error(f"❌ Критическая ошибка при запуске бота: {e}")
