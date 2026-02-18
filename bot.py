@@ -6,6 +6,8 @@ import os
 from datetime import datetime
 import asyncio
 import logging
+from flask import Flask
+import threading
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -15,11 +17,25 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 FACEIT_API_KEY = os.getenv('FACEIT_API_KEY')
 CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0'))
 TARGET_PLAYER = "UNCRKING"
+PORT = int(os.getenv('PORT', 10000))  # Render дает порт в переменной PORT
 
-# Проверка наличия токенов
-if not DISCORD_TOKEN or not FACEIT_API_KEY or not CHANNEL_ID:
-    logging.error("❌ Не все переменные окружения установлены!")
-    exit(1)
+# ========== ВЕБ-СЕРВЕР ДЛЯ UPTIMEROBOT ==========
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    """Простая страница для проверки что бот жив"""
+    return "Faceit бот работает! 🤖"
+
+@app.route('/ping')
+def ping():
+    """Эндпоинт для UptimeRobot - будет будить бота"""
+    logging.info("🏓 Получен пинг от UptimeRobot")
+    return "pong", 200
+
+def run_web_server():
+    """Запускает веб-сервер в отдельном потоке"""
+    app.run(host='0.0.0.0', port=PORT)
 
 # ========== НАСТРОЙКИ БОТА ==========
 intents = discord.Intents.default()
@@ -34,6 +50,7 @@ class FaceitBot(commands.Bot):
         logging.info(f"✅ Бот {self.user} запущен!")
         logging.info(f"📡 Отслеживаем игрока: {TARGET_PLAYER}")
         logging.info(f"📢 Канал для оповещений: {CHANNEL_ID}")
+        logging.info(f"🌐 Веб-сервер запущен на порту {PORT}")
         self.loop.create_task(self.check_current_match())
 
 bot = FaceitBot()
@@ -224,9 +241,13 @@ async def check_current_match():
         return
     
     last_match_id = None
+    check_count = 0
     
     while not bot.is_closed():
         try:
+            check_count += 1
+            logging.info(f"🔍 Проверка матча #{check_count}")
+            
             match_info = get_current_match_info(TARGET_PLAYER)
             
             if match_info and match_info['match_id'] != last_match_id:
@@ -257,9 +278,11 @@ async def check_current_match():
                 await channel.send(embed=embed)
                 logging.info(f"✅ Оповещение о матче {match_info['match_id']} отправлено!")
                 
-                await asyncio.sleep(300)
+                await asyncio.sleep(300)  # Ждем 5 минут перед следующей проверкой этого же матча
             
-            await asyncio.sleep(30)
+            # Ждем 2 минуты до следующей проверки
+            # (UptimeRobot будет будить бота каждые 5 минут)
+            await asyncio.sleep(120)
             
         except Exception as e:
             logging.error(f"❌ Ошибка в фоновой задаче: {e}")
@@ -267,5 +290,11 @@ async def check_current_match():
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
-    logging.info("🚀 Запуск Faceit бота...")
+    logging.info("🚀 Запуск Faceit бота с веб-сервером...")
+    
+    # Запускаем веб-сервер в отдельном потоке
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    
+    # Запускаем Discord бота
     bot.run(DISCORD_TOKEN)
